@@ -1,5 +1,8 @@
 module router;
 
+import std::collections;
+import std::net::os;
+
 // Login message is smaller than other messages
 // to prevent exhausting memory by clients that aren't logged in.
 const int MAX_LOGIN_MSG_SIZE = 512;
@@ -44,7 +47,7 @@ enum ClientState
 // `ref_count` must be decremented when all bytes of the message have been sent.
 struct SharedPendingMessage
 {
-    uint ref_count
+    uint ref_count;
     MsgHeader header;
     char[*] body;
 }
@@ -111,7 +114,7 @@ struct Client
     // This is primarily useful when the service broadcasts a message and
     // also for notifying clients when the service terminates
     // Doesn't contain duplicate clients.
-    ElasticArray(<ClientServiceId, MAX_CLIENTS>) subscribers;
+    ElasticArray(<ClientInstanceId, MAX_CLIENTS>) subscribers;
 }
 
 // When initialized != 0.
@@ -210,4 +213,10 @@ struct MsgHeader @packed
     ushort flags;
     uint body_size;
     ClientInstanceId instance_id;  // 0 when not used.
+}
+
+struct Config
+{
+    ZString host;
+    int port;
 }
