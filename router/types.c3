@@ -64,7 +64,7 @@ struct Subscription
 struct AwaitedResponse
 {
     // One of: LOGIN, CLIENT_ADDED_TO_SERVICE, CLIENT_REMOVED_FROM_SERVICE, PONG.
-    ushort msg_type;
+    MsgType msg_type;
     // When the original request has been enqueued by router.
     // This is also used to determine when the response should arrive.
     // In the case of PONG, its `header.enqueued_by_router_us` must be equal to this timestamp.
@@ -133,7 +133,7 @@ struct Router
     // Listening socket.
     NativeSocket server_socket;
 
-    // TODO: Add epoll file descriptor
+    EPollFd epfd;
 
     // Interning service names.
 

@@ -37,6 +37,9 @@ fn Config parse_config()
     };
 }
 
+// Must not be on stack because it's huge.
+Router router;
+
 fn void main()
 {
     Config config = parse_config();
@@ -101,6 +104,9 @@ fn void main()
         abort_with_errno("Server socket wasn't added to epoll");
     }
 
+    router.init(server_socket, epfd);
+    defer router.destroy();
+
     io::eprintfn("Listening on %s:%d", config.host, config.port);
 
     // Event loop.
@@ -164,8 +170,7 @@ fn void main()
                     else
                     {
                         io::eprintfn("Accepted client from %s:%s", (ZString)&host[0], (ZString)&serv[0]);
-
-                        // TODO: Try to add router client.
+                        router.add_client(client_socket);
                     }
                 }
             }
@@ -178,8 +183,15 @@ fn void main()
                     io::eprintfn("Unexpected event on client socket %d", event.events);
                 }
 
-                // TODO: Close client socket and remove router client.
-                if (error) io::eprintfn("Error on client socket");
+                // TODO: Ignore event if client is `WAITING_FOR_CLOSE`.
+
+                // TODO: Close client socket and remove router client and notify clients connected to it.
+                if (error)
+                {
+                    // TODO: Log which client (eg. host, port, instance id).
+                    io::eprintfn("Error on client socket");
+                    router.mark_client_for_closing(instance_id);
+                }
 
                 io::eprintfn("TODO: Process client event %d", event.events);
             }
@@ -189,4 +201,66 @@ fn void main()
         // TODO: Check if responses aren't delayed.
         // TODO: Close clients `WAITING_FOR_CLOSE`.
     }
+}
+
+fn void Router.init(&self, NativeSocket server_socket, EPollFd epfd)
+{
+    self.server_socket = server_socket;
+    self.epfd = epfd;
+}
+
+fn void Router.destroy(&self)
+{
+    *self = {};
+}
+
+// TODO: Accept host and port.
+fn void Router.add_client(&self, NativeSocket client_socket)
+{
+    // Find free slot in `self.clients` array.
+    if (self.active_clients_count == self.clients.len)
+    {
+        // TODO: Log that there's no free slot and we have to disconnect the client.
+        // TODO: Log which client (eg. host, port).
+        (void)client_socket.close();
+        return;
+    }
+    int client_index = 0;
+    for (; client_index < self.clients.len; client_index++)
+    {
+        if (self.clients[client_index].state == NOT_INITIALIZED) break;
+    }
+    // We haven't found a free slot.
+    if (client_index == self.clients.len) abort("Router has inconsistent state: no free slot for client");
+
+    // Try to add client to epoll.
+    // Fortunately if it fails we don't have to do any special cleanup,
+    // just closing the client socket is enough.
+    if (epoll_ctl(self.epfd, EPOLL_CTL_ADD, client_socket, &&EPollEvent { .events = EPOLLIN }) == -1)
+    {
+        // TODO: Log that we were unable to add client to epoll.
+        // TODO: Log which client (eg. host, port).
+        io::eprintfn("Client socket of a newly accepted client wasn't added to epoll");
+        (void)client_socket.close();
+        return;
+    }
+
+    self.total_clients_connected++;
+    self.active_clients_count++;
+    ClientInstanceId instance_id;
+    instance_id.idx = (ushort)client_index;
+    instance_id.unique = self.total_clients_connected;
+
+    Client* client = &self.clients[client_index];
+    client.instance_id = instance_id;
+    client.state = WAITING_FOR_LOGIN;
+    client.socket = client_socket;
+    // TODO: request_enqueued_by_router_us
+    client.awaited_responses.push({ .msg_type = LOGIN, .request_enqueued_by_router_us = 0 });
+}
+
+fn void Router.mark_client_for_closing(&self, ClientInstanceId instance_id)
+{
+    Client* client = &self.clients[instance_id.idx];
+    client.state = WAITING_FOR_CLOSE;
 }
