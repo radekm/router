@@ -101,5 +101,99 @@ fn void main()
     if (epfd == -1) abort_with_errno("epoll_create failed");
     defer epfd.close();
 
-    // TODO: Start server loop.
+    // `EPollEvent.data.u64` contains `ClientInstanceId`.
+    // This `ClientInstanceId` is `0` for server socket.
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, server_socket, &&EPollEvent { .events = EPOLLIN }) == -1)
+    {
+        abort_with_errno("Server socket wasn't added to epoll");
+    }
+
+    io::eprintfn("Listening on %s:%d", config.host, config.port);
+
+    // Event loop.
+    while (true)
+    {
+        EPollEvent[32] events;
+        CInt n = epoll_wait(epfd, &events[0], events.len, 1000);
+        if (n == -1) abort_with_errno("epoll_wait failed");
+
+        foreach (EPollEvent event : events[:n])
+        {
+            bool error = event.events & (EPOLLERR | EPOLLHUP) != 0;
+
+            ClientInstanceId instance_id = (ClientInstanceId)event.data.u64;
+
+            // Event on server socket.
+            if (instance_id == ClientInstanceId {})
+            {
+                EPoll expected_events = EPOLLIN | EPOLLERR | EPOLLHUP;
+                if (event.events & ~expected_events != 0)
+                {
+                    io::eprintfn("Unexpected event on server socket %d", event.events);
+                }
+
+                if (error) abort("Error on server socket");
+
+                // No new connection to accept.
+                if (event.events & EPOLLIN == 0) continue;
+
+                // For client's address.
+                char[128] addr_storage;
+                Socklen_t addr_len = addr_storage.len;
+
+                // Try to accept one connection. Remaining connections will be extracted
+                // in the next iterations of event loop.
+                NativeSocket client_socket = accept4(
+                    server_socket,
+                    (SockAddrPtr)&addr_storage,
+                    &addr_len,
+                    SOCK_NONBLOCK);
+                if (client_socket == -1)
+                {
+                    CInt errno = libc::errno();
+                	io::eprintfn("Failed to accept connection. Errno %d: %s", errno, libc::strerror(errno));
+                }
+                else
+                {
+                    // Connection has been accepted.
+                    char[128] host;
+                    char[128] serv;
+                    CInt name_error = getnameinfo(
+                        (SockAddrPtr)&addr_storage, addr_len,
+                        &host[0], host.len,
+                        &serv[0], serv.len,
+                        0);
+                    if (name_error != 0)
+                    {
+                        io::eprintfn("Disconnecting newly accepted client - its address can't be resolved");
+                        (void)client_socket.close();
+                    }
+                    else
+                    {
+                        io::eprintfn("Accepted client from %s:%s", (ZString)&host[0], (ZString)&serv[0]);
+
+                        // TODO: Try to add router client.
+                    }
+                }
+            }
+            // Event on client socket.
+            else
+            {
+                EPoll expected_events = EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP;
+                if (event.events & ~expected_events != 0)
+                {
+                    io::eprintfn("Unexpected event on client socket %d", event.events);
+                }
+
+                // TODO: Close client socket and remove router client.
+                if (error) io::eprintfn("Error on client socket");
+
+                io::eprintfn("TODO: Process client event %d", event.events);
+            }
+        }
+
+        // TODO: Send PINGs.
+        // TODO: Check if responses aren't delayed.
+        // TODO: Close clients `WAITING_FOR_CLOSE`.
+    }
 }

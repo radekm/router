@@ -12,6 +12,14 @@ const CInt EAI_SYSTEM = -11;
 
 extern fn ZString gai_strerror(CInt ecode);
 
+extern fn NativeSocket accept4(NativeSocket socket, SockAddrPtr addr, Socklen_t* addr_len, AISockType flags);
+
+extern fn CInt getnameinfo(
+    SockAddrPtr addr, Socklen_t addr_len,
+    char* host, Socklen_t host_len,
+    char* serv, Socklen_t serv_len,
+    CInt flags);
+
 distinct EPollFd = inline Fd;
 
 fn void EPollFd.close(self)
