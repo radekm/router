@@ -23,21 +23,14 @@ fn Config parse_config()
 {
     @pool()
     {
-        // Unfortunately shorter variant doesn't compile:
-        // char[] bytes = file::load_temp("config.json") ?? abort("Unable to open config.json file");
-        // See https://github.com/c3lang/c3c/issues/1913.
-        char[]! bytes = file::load_temp("config.json");
-        if (catch bytes) abort("Unable to open config.json file");
-        Object*! obj = json::temp_parse_string((String)bytes);
-        if (catch obj) abort("Unable to parse config.json file");
+        char[] bytes = file::load_temp("config.json") ?? abort("Unable to open config.json file");
+        Object* obj = json::temp_parse_string((String)bytes) ?? abort("Unable to parse config.json file");
 
-        String! host = obj.get_string("host");
-        if (catch host) abort("Unable to read host");
-        int! port = obj.get_int("port");
-        if (catch port) abort("Unable to read port");
+        String host = obj.get_string("host") ?? abort("Unable to read host");
+        int port = obj.get_int("port") ?? abort("Unable to read port");
 
         Config config;
-        config.host = host.zstr_copy();
+        config.host = host.zstr_copy();  // Call copy after processing entire config.
         config.port = port;
 
         return config;
