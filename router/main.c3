@@ -123,7 +123,7 @@ fn void main()
             ClientInstanceId instance_id = (ClientInstanceId)event.data.u64;
 
             // Event on server socket.
-            if (instance_id == ClientInstanceId {})
+            if ((ulong)instance_id == 0)
             {
                 EPoll expected_events = EPOLLIN | EPOLLERR | EPOLLHUP;
                 if (event.events & ~expected_events != 0)
@@ -170,7 +170,7 @@ fn void main()
                     else
                     {
                         io::eprintfn("Accepted client from %s:%s", (ZString)&host[0], (ZString)&serv[0]);
-                        router.add_client(client_socket);
+                        router.add_client(client_socket, (ZString)&host[0], (ZString)&serv[0]);
                     }
                 }
             }
@@ -183,16 +183,23 @@ fn void main()
                     io::eprintfn("Unexpected event on client socket %d", event.events);
                 }
 
-                // TODO: Ignore event if client is `WAITING_FOR_CLOSE`.
+                Client* client = &router.clients[instance_id.idx];
 
-                // TODO: Close client socket and remove router client and notify clients connected to it.
+                if (client.state == NOT_INITIALIZED) abort("Got event for client which is not initialized");
+                if (client.instance_id != instance_id) abort("Actual instance id differs from epoll instance id");
+
+                // Ignore event if client is `WAITING_FOR_CLOSE`.
+                if (client.state == WAITING_FOR_CLOSE) continue;
+
                 if (error)
                 {
-                    // TODO: Log which client (eg. host, port, instance id).
-                    io::eprintfn("Error on client socket");
+                    io::eprintfn("Error on client socket from '%s'", client.addr);
                     router.mark_client_for_closing(instance_id);
+                    continue;
                 }
 
+                // Our strategy is to prefer writing over reading
+                // to free memory consumed by `pending_messages`.
                 io::eprintfn("TODO: Process client event %d", event.events);
             }
         }
@@ -214,14 +221,12 @@ fn void Router.destroy(&self)
     *self = {};
 }
 
-// TODO: Accept host and port.
-fn void Router.add_client(&self, NativeSocket client_socket)
+fn void Router.add_client(&self, NativeSocket client_socket, ZString host, ZString port)
 {
     // Find free slot in `self.clients` array.
     if (self.active_clients_count == self.clients.len)
     {
-        // TODO: Log that there's no free slot and we have to disconnect the client.
-        // TODO: Log which client (eg. host, port).
+        io::eprintfn("No free slot for client from '%s:%s'", host, port);
         (void)client_socket.close();
         return;
     }
@@ -230,31 +235,34 @@ fn void Router.add_client(&self, NativeSocket client_socket)
     {
         if (self.clients[client_index].state == NOT_INITIALIZED) break;
     }
-    // We haven't found a free slot.
+    // We haven't found a free slot
+    // but `self.active_clients_count != self.clients.len`
+    // means that there should be a free slot.
     if (client_index == self.clients.len) abort("Router has inconsistent state: no free slot for client");
 
+    ClientInstanceId instance_id;
+    instance_id.idx = (ushort)client_index;
+    instance_id.unique = self.total_clients_connected + 1;
+
     // Try to add client to epoll.
-    // Fortunately if it fails we don't have to do any special cleanup,
-    // just closing the client socket is enough.
-    if (epoll_ctl(self.epfd, EPOLL_CTL_ADD, client_socket, &&EPollEvent { .events = EPOLLIN }) == -1)
+    EPollEvent new_event = { .events = EPOLLIN, .data.u64 = (ulong)instance_id };
+    if (epoll_ctl(self.epfd, EPOLL_CTL_ADD, client_socket, &new_event) == -1)
     {
-        // TODO: Log that we were unable to add client to epoll.
-        // TODO: Log which client (eg. host, port).
-        io::eprintfn("Client socket of a newly accepted client wasn't added to epoll");
-        (void)client_socket.close();
-        return;
+        abort_with_errno("Client socket of new client wasn't added to epoll");
     }
+
+    DString addr = dstring::new();
+    defer addr.free();
+    addr.appendf("%s:%s", host, port);
 
     self.total_clients_connected++;
     self.active_clients_count++;
-    ClientInstanceId instance_id;
-    instance_id.idx = (ushort)client_index;
-    instance_id.unique = self.total_clients_connected;
 
     Client* client = &self.clients[client_index];
     client.instance_id = instance_id;
     client.state = WAITING_FOR_LOGIN;
     client.socket = client_socket;
+    client.addr = addr.copy_str();
     // TODO: request_enqueued_by_router_us
     client.awaited_responses.push({ .msg_type = LOGIN, .request_enqueued_by_router_us = 0 });
 }
@@ -262,5 +270,17 @@ fn void Router.add_client(&self, NativeSocket client_socket)
 fn void Router.mark_client_for_closing(&self, ClientInstanceId instance_id)
 {
     Client* client = &self.clients[instance_id.idx];
-    client.state = WAITING_FOR_CLOSE;
+
+    if (client.state == NOT_INITIALIZED) abort("Cannot mark uninitialized client for closing");
+    if (client.state != WAITING_FOR_CLOSE)
+    {
+        client.state = WAITING_FOR_CLOSE;
+        self.clients_waiting_for_close.push(instance_id);
+    }
+}
+
+fn void Client.destroy(&self)
+{
+    self.addr.free();
+    *self = {};
 }

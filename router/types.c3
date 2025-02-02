@@ -80,6 +80,7 @@ struct Client
     ClientInstanceId instance_id;
     ClientState state;
     NativeSocket socket;
+    String addr;  // TODO: Consider `char[128]`.
 
     // Services to which this client is subscribed.
     // This client may receive messages from these services and send requests to these services.
