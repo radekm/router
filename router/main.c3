@@ -170,7 +170,7 @@ fn void main()
                     }
                     else
                     {
-                        io::eprintfn("Accepted client from %s:%s", (ZString)&host[0], (ZString)&serv[0]);
+                        io::eprintfn("Accepted client from '%s:%s'", (ZString)&host[0], (ZString)&serv[0]);
                         router.add_client(client_socket, (ZString)&host[0], (ZString)&serv[0]);
                     }
                 }
@@ -201,7 +201,17 @@ fn void main()
 
                 // Our strategy is to prefer writing over reading
                 // to free memory consumed by `pending_messages`.
-                io::eprintfn("TODO: Process client event %d", event.events);
+                if (event.events & EPOLLOUT != 0)
+                {
+                    io::eprintfn("TODO: Send pending message");
+                }
+                else if (event.events & EPOLLIN != 0)
+                {
+                    if (router.receive_msg(client))
+                    {
+                        router.process_msg(client);
+                    }
+                }
             }
         }
 
@@ -280,6 +290,91 @@ fn void Router.mark_client_for_closing(&self, ClientInstanceId instance_id)
         client.state = WAITING_FOR_CLOSE;
         self.clients_waiting_for_close.push(instance_id);
     }
+}
+
+// Returns `true` if the entire message has been received and can be processed.
+fn bool Router.receive_msg(&self, Client* client)
+{
+    // Receive rest of the header.
+    if (client.received_from_header < MsgHeader.sizeof)
+    {
+        char* buffer = (char*)&client.header;
+        isz n = libc::recv(
+            client.socket,
+            buffer + client.received_from_header,
+            MsgHeader.sizeof - client.received_from_header,
+            0);
+
+        // Handle error.
+        if (n == -1)
+        {
+            self.handle_error_when_receiving_or_sending(client, receiving: true);
+            return false;
+        }
+
+        client.received_from_header += (int)n;
+    }
+
+    // Read rest of the body.
+    if (client.received_from_header == MsgHeader.sizeof && client.header.body_size > 0)
+    {
+        // Allocate buffer for the body.
+        if (client.body == null)
+        {
+            uint max_body_size = client.state == WAITING_FOR_LOGIN ? MAX_LOGIN_MSG_SIZE : MAX_MSG_SIZE;
+            if (client.header.body_size > max_body_size)
+            {
+                io::eprintfn("Closing client from '%s' because it sent message with too big body %d",
+                    client.addr, client.header.body_size);
+                self.mark_client_for_closing(client.instance_id);
+                return false;
+            }
+
+            client.body = malloc(client.header.body_size);
+        }
+
+        // Receive rest of the body.
+        if (client.received_from_body < client.header.body_size)
+        {
+            isz n = libc::recv(
+                client.socket,
+                client.body + client.received_from_body,
+                (usz)client.header.body_size - client.received_from_body,
+                0);
+
+            // Handle error.
+            if (n == -1)
+            {
+                self.handle_error_when_receiving_or_sending(client, receiving: true);
+                return false;
+            }
+
+            client.received_from_body += (int)n;
+        }
+    }
+
+    bool received_everything =
+        client.received_from_header == MsgHeader.sizeof &&
+        client.received_from_body == client.header.body_size;
+    return received_everything;
+}
+
+fn void Router.process_msg(&self, Client* client)
+{
+    io::eprintfn("TODO: Process received message");
+}
+
+fn void Router.handle_error_when_receiving_or_sending(&self, Client* client, bool receiving)
+{
+    CInt errno = libc::errno();
+
+    // Recoverable error.
+    if (errno == errno::EAGAIN || errno == errno::EWOULDBLOCK || errno == errno::EINTR) return;
+
+    String action = receiving ? "receiving" : "sending";
+    io::eprintfn("Closing client from '%s' because of error %d when %s: %s",
+        client.addr, errno, action, libc::strerror(errno));
+    self.mark_client_for_closing(client.instance_id);
 }
 
 fn void Client.destroy(&self)
