@@ -13,8 +13,6 @@ fn bool read_short_str(char[] input, String* str, char[]* remaining_input)
     return true;
 }
 
-// TODO: Free the message after processing it and zero
-//       `received_from_header`, `header`, `received_from_body` and `body`.
 fn void Router.process_msg(&self, Client* client)
 {
     if (client.header.msg_type >= MsgType.values.len)
@@ -82,7 +80,7 @@ fn void Router.process_msg(&self, Client* client)
         case MSG_TO_ONE_CLIENT:
         case REQUEST:
         case PONG:
-            io::eprintfn("TODO: Process received message of type %s", msg_type);
+            abort("TODO: Process received message of type %s", msg_type);
 
         case CONNECTED_TO_SERVICE:
         case DISCONNECTED_FROM_SERVICE:
@@ -90,5 +88,13 @@ fn void Router.process_msg(&self, Client* client)
         case REMOVE_CLIENT_FROM_SERVICE:
         case PING:
             self.mark_client_for_closing(client, "Client sent message of invalid type %s", msg_type);
+            return;
     }
+
+    // Free successfully processed message.
+    client.received_from_header = 0;
+    client.header = {};
+    client.received_from_body = 0;
+    free(client.body);
+    client.body = null;
 }

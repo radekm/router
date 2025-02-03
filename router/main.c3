@@ -370,6 +370,7 @@ fn void Router.handle_error_when_receiving_or_sending(&self, Client* client, boo
 fn void Client.destroy(&self)
 {
     self.addr.free();
+    free(self.body);
     *self = {};
 }
 
