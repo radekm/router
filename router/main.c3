@@ -194,8 +194,7 @@ fn void main()
 
                 if (error)
                 {
-                    io::eprintfn("Error on client socket from '%s'", client.addr);
-                    router.mark_client_for_closing(instance_id);
+                    router.mark_client_for_closing(client, "Error on client socket");
                     continue;
                 }
 
@@ -249,7 +248,7 @@ fn void Router.add_client(&self, NativeSocket client_socket, ZString host, ZStri
     // We haven't found a free slot
     // but `self.active_clients_count != self.clients.len`
     // means that there should be a free slot.
-    if (client_index == self.clients.len) abort("Router has inconsistent state: no free slot for client");
+    if (client_index == self.clients.len) abort("Router has inconsistent state: No free slot for client");
 
     ClientInstanceId instance_id;
     instance_id.idx = (ushort)client_index;
@@ -274,21 +273,21 @@ fn void Router.add_client(&self, NativeSocket client_socket, ZString host, ZStri
     client.state = WAITING_FOR_LOGIN;
     client.socket = client_socket;
     client.addr = addr.copy_str();
-    client.awaited_responses.push({
+    client.awaited_responses.enqueue({
         .msg_type = LOGIN,
         .request_enqueued_by_router_us = get_monotonic_event_time_us(),
     });
 }
 
-fn void Router.mark_client_for_closing(&self, ClientInstanceId instance_id)
+macro void Router.mark_client_for_closing(&self, Client* client, String $reason, ...)
 {
-    Client* client = &self.clients[instance_id.idx];
+    io::eprintfn("CLIENT ERROR: Marking client '%s' for closing: " +++ $reason, client.addr, $vasplat);
 
     if (client.state == NOT_INITIALIZED) abort("Cannot mark uninitialized client for closing");
     if (client.state != WAITING_FOR_CLOSE)
     {
         client.state = WAITING_FOR_CLOSE;
-        self.clients_waiting_for_close.push(instance_id);
+        self.clients_waiting_for_close.enqueue(client.instance_id);
     }
 }
 
@@ -324,9 +323,7 @@ fn bool Router.receive_msg(&self, Client* client)
             uint max_body_size = client.state == WAITING_FOR_LOGIN ? MAX_LOGIN_MSG_SIZE : MAX_MSG_SIZE;
             if (client.header.body_size > max_body_size)
             {
-                io::eprintfn("Closing client from '%s' because it sent message with too big body %d",
-                    client.addr, client.header.body_size);
-                self.mark_client_for_closing(client.instance_id);
+                self.mark_client_for_closing(client, "Client sent too big body %d", client.header.body_size);
                 return false;
             }
 
@@ -359,11 +356,6 @@ fn bool Router.receive_msg(&self, Client* client)
     return received_everything;
 }
 
-fn void Router.process_msg(&self, Client* client)
-{
-    io::eprintfn("TODO: Process received message");
-}
-
 fn void Router.handle_error_when_receiving_or_sending(&self, Client* client, bool receiving)
 {
     CInt errno = libc::errno();
@@ -372,9 +364,7 @@ fn void Router.handle_error_when_receiving_or_sending(&self, Client* client, boo
     if (errno == errno::EAGAIN || errno == errno::EWOULDBLOCK || errno == errno::EINTR) return;
 
     String action = receiving ? "receiving" : "sending";
-    io::eprintfn("Closing client from '%s' because of error %d when %s: %s",
-        client.addr, errno, action, libc::strerror(errno));
-    self.mark_client_for_closing(client.instance_id);
+    self.mark_client_for_closing(client, "Error %d when %s: %s", errno, action, libc::strerror(errno));
 }
 
 fn void Client.destroy(&self)

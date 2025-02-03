@@ -89,7 +89,7 @@ struct Client
 
     // Ensures that the client is alive and responds promptly.
     // Responses must arrive in the same order as the requests.
-    RingBuffer(<AwaitedResponse, MAX_AWAITED_RESPONSES>) awaited_responses;
+    RingBuf(<AwaitedResponse, MAX_AWAITED_RESPONSES>) awaited_responses;
 
     // For recieving messages from this client.
 
@@ -103,7 +103,7 @@ struct Client
     // `sent_from_message` is the number of bytes from the first message
     // in `pending_messages` queue that have been sent.
     int sent_from_message;
-    RingBuffer(<SharedPendingMessage*, MAX_PENDING_MESSAGES>) pending_messages;
+    RingBuf(<SharedPendingMessage*, MAX_PENDING_MESSAGES>) pending_messages;
 
     // --------------------------------------------------------------
     // Following fields are used only if this client is a service.
@@ -151,7 +151,7 @@ struct Router
 
     // Queue of clients in `WAITING_FOR_CLOSE` state.
     // Closing one client may switch another client to `WAITING_FOR_CLOSE` state.
-    RingBuffer(<ClientInstanceId, MAX_CLIENTS>) clients_waiting_for_close;
+    RingBuf(<ClientInstanceId, MAX_CLIENTS>) clients_waiting_for_close;
 }
 
 enum MsgType : ushort
@@ -208,7 +208,7 @@ struct MsgHeader @packed
 {
     // For messages from router, `enqueued_by_router_us` contains the timestamp when router
     // enqueued the message for sending.
-    // For messages from clients, it is empty except for PONG.
+    // For messages from clients, it is zero except for PONG.
     ulong enqueued_by_router_us;  // Since 1970.
     ushort msg_type;
     ushort flags;
