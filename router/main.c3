@@ -4,6 +4,7 @@ import std::collections;
 import std::encoding::json;
 import std::io;
 import std::net::os;
+import std::time::os;
 import libc;
 
 macro void abort_with_errno(String string, ...) @noreturn
@@ -263,8 +264,10 @@ fn void Router.add_client(&self, NativeSocket client_socket, ZString host, ZStri
     client.state = WAITING_FOR_LOGIN;
     client.socket = client_socket;
     client.addr = addr.copy_str();
-    // TODO: request_enqueued_by_router_us
-    client.awaited_responses.push({ .msg_type = LOGIN, .request_enqueued_by_router_us = 0 });
+    client.awaited_responses.push({
+        .msg_type = LOGIN,
+        .request_enqueued_by_router_us = get_monotonic_event_time_us(),
+    });
 }
 
 fn void Router.mark_client_for_closing(&self, ClientInstanceId instance_id)
@@ -283,4 +286,17 @@ fn void Client.destroy(&self)
 {
     self.addr.free();
     *self = {};
+}
+
+fn ulong get_monotonic_event_time_us()
+{
+	TimeSpec ts;
+	if (os::clock_gettime(os::CLOCK_REALTIME, &ts) != 0)
+    {
+        abort_with_errno("clock_gettime failed");
+    }
+
+    static ulong time_us = 0;  // Ensure that time is monotonic.
+    time_us = max(time_us, ts.s * 1_000_000u64 + ts.ns / 1_000u64);
+	return time_us;
 }
