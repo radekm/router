@@ -214,7 +214,7 @@ fn void main()
             }
         }
 
-        // TODO: Send PINGs.
+        router.enqueue_pings();
         // TODO: Check if responses aren't delayed.
         // TODO: Close clients `WAITING_FOR_CLOSE`.
     }
@@ -356,12 +356,13 @@ fn bool Router.receive_msg(&self, Client* client)
     return received_everything;
 }
 
-fn void Router.enqueue_pending_msg(&self, Client* client, SharedPendingMessage* msg)
+// Returns `true` if the message has been successfully enqueued.
+fn bool Router.enqueue_pending_msg(&self, Client* client, SharedPendingMessage* msg)
 {
     if (!client.pending_messages.can_enqueue())
     {
         router.mark_client_for_closing(client, "Too many pending messages");
-        return;
+        return false;
     }
 
     client.pending_messages.enqueue(msg);
@@ -377,6 +378,8 @@ fn void Router.enqueue_pending_msg(&self, Client* client, SharedPendingMessage* 
             abort_with_errno("Failed to configure epoll for both reading and writing");
         }
     }
+
+    return true;
 }
 
 fn void Router.send_pending_msg(&self, Client* client)
@@ -468,6 +471,47 @@ fn void Router.handle_error_when_receiving_or_sending(&self, Client* client, boo
 
     String action = receiving ? "receiving" : "sending";
     self.mark_client_for_closing(client, "Error %d when %s: %s", errno, action, libc::strerror(errno));
+}
+
+fn void Router.enqueue_pings(&self)
+{
+    ulong now = get_monotonic_event_time_us();
+    // Too early to enqueue pings.
+    if (now < self.pings_sent_us + INTERVAL_BETWEEN_PINGS_US) return;
+
+    SharedPendingMessage* msg = mem::new_with_padding(SharedPendingMessage, 0);
+    msg.header = {
+        .enqueued_by_router_us = now,
+        .msg_type = MsgType.PING.ordinal,
+    };
+
+    foreach (&client : self.clients)
+    {
+        if (client.state != READY) continue;
+        if (self.enqueue_pending_msg(client, msg))
+        {
+            // PING has been enqueued. Add PONG to awaited responses.
+            if (client.awaited_responses.can_enqueue())
+            {
+                client.awaited_responses.enqueue({
+                    .msg_type = PONG,
+                    .request_enqueued_by_router_us = now,
+                });
+            }
+            else
+            {
+                self.mark_client_for_closing(client, "Too many awaited responses");
+            }
+        }
+    }
+
+    // Ping hasn't been enqueued.
+    if (msg.ref_count == 0)
+    {
+        free(msg);
+    }
+
+    self.pings_sent_us = now;
 }
 
 fn void Client.destroy(&self)

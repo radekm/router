@@ -21,6 +21,7 @@ const int MAX_PENDING_MESSAGES = 5000;
 // Maximum number of responses that can be awaited from a single client.
 // Trying to await an additional response causes disconnect of the client.
 const int MAX_AWAITED_RESPONSES = 128;
+const int INTERVAL_BETWEEN_PINGS_US = 5_000_000;
 
 enum ClientState
 {
@@ -49,7 +50,7 @@ struct SharedPendingMessage
 {
     uint ref_count;
     MsgHeader header;
-    char[*] body;
+    char[?] body;
 }
 
 // Represents a subscription of a client to a service.
@@ -148,6 +149,9 @@ struct Router
     Client[MAX_CLIENTS] clients;
     int active_clients_count;
     ulong total_clients_connected;  // Used for generating instance ids.
+
+    // The last timestamp when router sent pings.
+    ulong pings_sent_us;
 
     // Queue of clients in `WAITING_FOR_CLOSE` state.
     // Closing one client may switch another client to `WAITING_FOR_CLOSE` state.
