@@ -202,7 +202,7 @@ fn void main()
                 // to free memory consumed by `pending_messages`.
                 if (event.events & EPOLLOUT != 0)
                 {
-                    io::eprintfn("TODO: Send pending message");
+                    router.send_pending_msg(client);
                 }
                 else if (event.events & EPOLLIN != 0)
                 {
@@ -297,7 +297,7 @@ fn bool Router.receive_msg(&self, Client* client)
     // Receive rest of the header.
     if (client.received_from_header < MsgHeader.sizeof)
     {
-        char* buffer = (char*)&client.header;
+        void* buffer = &client.header;
         isz n = libc::recv(
             client.socket,
             buffer + client.received_from_header,
@@ -354,6 +354,109 @@ fn bool Router.receive_msg(&self, Client* client)
         client.received_from_header == MsgHeader.sizeof &&
         client.received_from_body == client.header.body_size;
     return received_everything;
+}
+
+fn void Router.enqueue_pending_msg(&self, Client* client, SharedPendingMessage* msg)
+{
+    if (!client.pending_messages.can_enqueue())
+    {
+        router.mark_client_for_closing(client, "Too many pending messages");
+        return;
+    }
+
+    client.pending_messages.enqueue(msg);
+    msg.ref_count++;
+
+    // We enqueued the first message.
+    if (client.pending_messages.written == 1)
+    {
+        // Configure epoll for sending - include `EPOLLOUT`.
+        EPollEvent mod_event = { .events = EPOLLIN | EPOLLOUT, .data.u64 = (ulong)client.instance_id };
+        if (epoll_ctl(self.epfd, EPOLL_CTL_MOD, client.socket, &mod_event) == -1)
+        {
+            abort_with_errno("Failed to configure epoll for both reading and writing");
+        }
+    }
+}
+
+fn void Router.send_pending_msg(&self, Client* client)
+{
+    while (true)
+    {
+        // There are no more messages waiting to be sent.
+        if (client.pending_messages.written == 0)
+        {
+            // Configure epoll only for receiving - exclude `EPOLLOUT`.
+            EPollEvent mod_event = { .events = EPOLLIN, .data.u64 = (ulong)client.instance_id };
+            if (epoll_ctl(self.epfd, EPOLL_CTL_MOD, client.socket, &mod_event) == -1)
+            {
+                abort_with_errno("Failed to configure epoll for reading only");
+            }
+            return;
+        }
+
+        SharedPendingMessage* msg = client.pending_messages.peek();
+        int msg_size = MsgHeader.sizeof + msg.header.body_size;
+        int remaining_size = msg_size - client.sent_from_message;
+        if (remaining_size < 0) abort("Router has inconsistent state: Sent more bytes than message size");
+        if (remaining_size == 0) abort("Router has inconsistent state: Sent message not removed");
+
+        // Sent the header.
+        if (client.sent_from_message < MsgHeader.sizeof)
+        {
+            void* buffer = &msg.header;
+            isz n = libc::send(
+                client.socket,
+                buffer + client.sent_from_message,
+                MsgHeader.sizeof - client.sent_from_message,
+                0);
+
+            // Handle error.
+            if (n == -1)
+            {
+                self.handle_error_when_receiving_or_sending(client, receiving: false);
+                return;
+            }
+
+            client.sent_from_message += (int)n;
+            // Even though we tried to send the entire header, it still hasn't been sent.
+            // Let's wait for the next event loop iteration.
+            if (client.sent_from_message != MsgHeader.sizeof) return;
+        }
+
+        // Update remaining size.
+        remaining_size = msg_size - client.sent_from_message;
+
+        // At this point the entire header has been sent.
+        if (remaining_size > 0)
+        {
+            // We have to send the body.
+            isz n = libc::send(
+                client.socket,
+                &msg.body + client.sent_from_message - MsgHeader.sizeof,
+                remaining_size,
+                0);
+
+            // Handle error.
+            if (n == -1)
+            {
+                self.handle_error_when_receiving_or_sending(client, receiving: false);
+                return;
+            }
+
+            client.sent_from_message += (int)n;
+            if (client.sent_from_message != msg_size) return;
+        }
+
+        // At this point the entire message has been sent.
+        msg.ref_count--;
+        if (msg.ref_count == 0)
+        {
+            free(msg);
+        }
+        client.pending_messages.dequeue();
+        client.sent_from_message = 0;  // Nothing has been sent from the next message.
+    }
 }
 
 fn void Router.handle_error_when_receiving_or_sending(&self, Client* client, bool receiving)

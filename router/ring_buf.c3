@@ -11,6 +11,11 @@ struct RingBuf
     Type[SIZE] buf;
 }
 
+fn bool RingBuf.can_enqueue(&self)
+{
+    return self.written < SIZE;
+}
+
 fn void RingBuf.enqueue(&self, Type x)
 {
     if (self.written == SIZE)
@@ -30,5 +35,15 @@ fn Type RingBuf.dequeue(&self)
     Type x = self.buf[self.head];
     self.head = (self.head + 1) % SIZE;
     self.written--;
+    return x;
+}
+
+fn Type RingBuf.peek(&self)
+{
+    if (self.written == 0)
+    {
+        abort("Ring buffer is empty");
+    }
+    Type x = self.buf[self.head];
     return x;
 }

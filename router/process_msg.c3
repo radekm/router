@@ -7,7 +7,7 @@ fn bool read_short_str(char[] input, String* str, char[]* remaining_input)
     if (input.len == 0) return false;
     char str_len = input[0];
     input = input[1..];
-    if (input.len < str.len) return false;
+    if (input.len < str_len) return false;
     *str = (String)input[:str_len];
     *remaining_input = input[str_len..];
     return true;
