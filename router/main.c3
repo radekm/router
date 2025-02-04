@@ -215,7 +215,7 @@ fn void main()
         }
 
         router.enqueue_pings();
-        // TODO: Check if responses aren't delayed.
+        router.check_awaited_responses();  // Check if responses aren't too delayed.
         // TODO: Close clients `WAITING_FOR_CLOSE`.
     }
 }
@@ -513,6 +513,32 @@ fn void Router.enqueue_pings(&self)
 
     self.pings_sent_us = now;
 }
+
+fn void Router.check_awaited_responses(&self)
+{
+    ulong now = get_monotonic_event_time_us();
+    // Too early to check responses.
+    if (now < self.responses_checked_us + INTERVAL_BETWEEN_CHECKING_RESPONSES_US) return;
+
+    foreach (&client : self.clients)
+    {
+        if (client.state != READY) continue;
+        if (client.awaited_responses.written > 0)
+        {
+            AwaitedResponse resp = client.awaited_responses.peek();
+            if (resp.request_enqueued_by_router_us + MAX_RESPONSE_TIME_US < now)
+            {
+                self.mark_client_for_closing(
+                    client,
+                    "Missing awaited response %s with request time %d and instance id %d",
+                    resp.msg_type, resp.request_enqueued_by_router_us, (ulong)resp.instance_id);
+            }
+        }
+    }
+
+    self.responses_checked_us = now;
+}
+
 
 fn void Client.destroy(&self)
 {

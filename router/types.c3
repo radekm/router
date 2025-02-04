@@ -22,6 +22,8 @@ const int MAX_PENDING_MESSAGES = 5000;
 // Trying to await an additional response causes disconnect of the client.
 const int MAX_AWAITED_RESPONSES = 128;
 const int INTERVAL_BETWEEN_PINGS_US = 5_000_000;
+const int INTERVAL_BETWEEN_CHECKING_RESPONSES_US = 5_000_000;
+const int MAX_RESPONSE_TIME_US = 5_000_000;
 
 enum ClientState
 {
@@ -150,8 +152,10 @@ struct Router
     int active_clients_count;
     ulong total_clients_connected;  // Used for generating instance ids.
 
-    // The last timestamp when router sent pings.
+    // The last time when router sent pings.
     ulong pings_sent_us;
+    // The last time when router checked awaited responses.
+    ulong responses_checked_us;
 
     // Queue of clients in `WAITING_FOR_CLOSE` state.
     // Closing one client may switch another client to `WAITING_FOR_CLOSE` state.
