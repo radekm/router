@@ -216,7 +216,7 @@ fn void main()
 
         router.enqueue_pings();
         router.check_awaited_responses();  // Check if responses aren't too delayed.
-        // TODO: Close clients `WAITING_FOR_CLOSE`.
+        router.close_clients_waiting_for_it();  // Close clients `WAITING_FOR_CLOSE`.
     }
 }
 
@@ -539,11 +539,44 @@ fn void Router.check_awaited_responses(&self)
     self.responses_checked_us = now;
 }
 
+fn void Router.close_clients_waiting_for_it(&self)
+{
+    while (self.clients_waiting_for_close.written > 0)
+    {
+        ClientInstanceId instance_id = self.clients_waiting_for_close.dequeue();
+        Client* client = &router.clients[instance_id.idx];
+        io::eprintfn("Closing client '%s'", client.addr);
 
+        if (client.state != WAITING_FOR_CLOSE) abort("Client waiting for close has invalid state");
+        if (client.instance_id != instance_id) abort("Actual instance id differs from instance id to be closed");
+
+        if (epoll_ctl(self.epfd, EPOLL_CTL_DEL, client.socket, &&EPollEvent {}) == -1)
+        {
+            abort_with_errno("Failed to remove client socket from epoll");
+        }
+        (void)client.socket.close();
+
+        // TODO: Notify services to which the client is subscribed.
+        // TODO: If this is a service, then notify clients that are subscribed to it.
+
+        client.destroy();
+    }
+}
+
+// Free memory.
 fn void Client.destroy(&self)
 {
     self.addr.free();
     free(self.body);
+    while (self.pending_messages.written > 0)
+    {
+        SharedPendingMessage* msg = self.pending_messages.dequeue();
+        msg.ref_count--;
+        if (msg.ref_count == 0)
+        {
+            free(msg);
+        }
+    }
     *self = {};
 }
 
