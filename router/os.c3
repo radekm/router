@@ -34,7 +34,7 @@ const EPollCtl EPOLL_CTL_MOD = 3;
 
 distinct EPoll = uint;
 const EPoll EPOLLIN = 0x001;
-const EPoll EPOLLOUT = 0x040;
+const EPoll EPOLLOUT = 0x004;
 const EPoll EPOLLERR = 0x008;
 const EPoll EPOLLHUP = 0x010;
 
