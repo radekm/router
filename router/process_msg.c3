@@ -31,6 +31,28 @@ fn ServiceId Router.intern_service_name(&self, String service_name)
     return new;
 }
 
+fn void Router.enqueue_msg_and_response_add_client_to_service(&self, ulong now, Client* service, ClientInstanceId client)
+{
+    SharedPendingMessage* msg = mem::new_with_padding(SharedPendingMessage, 0);
+    msg.header = {
+        .enqueued_by_router_us = now,
+        .msg_type = MsgType.ADD_CLIENT_TO_SERVICE.ordinal,
+        .instance_id = client,
+    };
+    if (self.enqueue_pending_msg(service, msg))
+    {
+        self.enqueue_awaited_response(service, {
+            .msg_type = CLIENT_ADDED_TO_SERVICE,
+            .request_enqueued_by_router_us = now,
+            .instance_id = client,
+        });
+    }
+    else
+    {
+        free(msg);
+    }
+}
+
 fn void Router.process_msg_login(&self, Client* client, ulong now, char[] body)
 {
     if (client.state != WAITING_FOR_LOGIN)
@@ -117,24 +139,7 @@ fn void Router.process_msg_login(&self, Client* client, ulong now, char[] body)
                 abort("Router has inconsistent state: Client is connected to service which doesn't exist");
             }
 
-            SharedPendingMessage* msg = mem::new_with_padding(SharedPendingMessage, 0);
-            msg.header = {
-                .enqueued_by_router_us = now,
-                .msg_type = MsgType.ADD_CLIENT_TO_SERVICE.ordinal,
-                .instance_id = existing_client.instance_id,
-            };
-            if (self.enqueue_pending_msg(client, msg))
-            {
-                self.enqueue_awaited_response(client, {
-                    .msg_type = CLIENT_ADDED_TO_SERVICE,
-                    .request_enqueued_by_router_us = now,
-                    .instance_id = existing_client.instance_id,
-                });
-            }
-            else
-            {
-                free(msg);
-            }
+            self.enqueue_msg_and_response_add_client_to_service(now, client, existing_client.instance_id);
 
             break;
         }
@@ -201,24 +206,7 @@ fn void Router.process_msg_subscribe_to_service(&self, Client* client, ulong now
         if (existing_client.state != READY) continue;
         if (existing_client.service_id != service_id) continue;
 
-        SharedPendingMessage* msg = mem::new_with_padding(SharedPendingMessage, 0);
-        msg.header = {
-            .enqueued_by_router_us = now,
-            .msg_type = MsgType.ADD_CLIENT_TO_SERVICE.ordinal,
-            .instance_id = client.instance_id,
-        };
-        if (self.enqueue_pending_msg(existing_client, msg))
-        {
-            self.enqueue_awaited_response(existing_client, {
-                .msg_type = CLIENT_ADDED_TO_SERVICE,
-                .request_enqueued_by_router_us = now,
-                .instance_id = client.instance_id,
-            });
-        }
-        else
-        {
-            free(msg);
-        }
+        self.enqueue_msg_and_response_add_client_to_service(now, existing_client, client.instance_id);
 
         break;
     }
