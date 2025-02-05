@@ -20,6 +20,8 @@ fn ServiceId Router.intern_service_name(&self, String service_name)
         return self.service_name_to_id[service_name]!!;
     }
 
+    if (self.service_id_to_name.len() == MAX_SERVICE_NAMES) abort("Too many interned service names");
+
     service_name = service_name.copy();
     self.service_id_to_name.push(service_name);
     ServiceId new = (ServiceId)self.service_id_to_name.len();
@@ -142,6 +144,86 @@ fn void Router.process_msg_login(&self, Client* client, ulong now, char[] body)
     io::eprintfn("Client '%s' logged in as service '%s'", client.addr, service_name);
 }
 
+fn void Router.process_msg_subscribe_to_service(&self, Client* client, ulong now, char[] body)
+{
+    if (client.state != READY)
+    {
+        self.mark_client_for_closing(client, "Not expected subscribe to service message from client in state %s", client.state);
+        return;
+    }
+    if (client.subscriptions.size == MAX_SUBSCRIPTIONS)
+    {
+        self.mark_client_for_closing(client, "Too many subscriptions");
+        return;
+    }
+    bool header_ok =
+        client.header.enqueued_by_router_us == 0 &&
+        client.header.flags == 0 &&
+        body.len > 0 &&
+        (ulong)client.header.instance_id == 0;
+    if (!header_ok)
+    {
+        self.mark_client_for_closing(client, "Invalid subscribe to service header");
+        return;
+    }
+
+    // Read subscribe to service message body.
+    String service_name;
+    bool body_ok =
+        read_short_str(body, &service_name, remaining_input: &body) &&
+        body.len == 0 && // Nothing remains.
+        service_name.len > 0 &&
+        service_name.len <= MAX_SERVICE_NAME_LEN;
+    if (!body_ok)
+    {
+        self.mark_client_for_closing(client, "Invalid subscribe to service body");
+        return;
+    }
+
+    ServiceId service_id = self.intern_service_name(service_name);
+
+    // Ensure that `client` is not subscribed to this service.
+    foreach (&subscription : client.subscriptions.entries[:client.subscriptions.size])
+    {
+        if (subscription.service == service_id)
+        {
+            self.mark_client_for_closing(client, "Client already subscribed to service");
+            return;
+        }
+    }
+
+    // Add subscription.
+    client.subscriptions.push({ .service = service_id });
+
+    // If the service exists, then send `ADD_CLIENT_TO_SERVICE` to it.
+    foreach (&existing_client : self.clients)
+    {
+        if (existing_client.state != READY) continue;
+        if (existing_client.service_id != service_id) continue;
+
+        SharedPendingMessage* msg = mem::new_with_padding(SharedPendingMessage, 0);
+        msg.header = {
+            .enqueued_by_router_us = now,
+            .msg_type = MsgType.ADD_CLIENT_TO_SERVICE.ordinal,
+            .instance_id = client.instance_id,
+        };
+        if (self.enqueue_pending_msg(existing_client, msg))
+        {
+            self.enqueue_awaited_response(existing_client, {
+                .msg_type = CLIENT_ADDED_TO_SERVICE,
+                .request_enqueued_by_router_us = now,
+                .instance_id = client.instance_id,
+            });
+        }
+        else
+        {
+            free(msg);
+        }
+
+        break;
+    }
+}
+
 fn void Router.process_msg_pong(&self, Client* client)
 {
     if (client.state != READY)
@@ -189,6 +271,7 @@ fn void Router.process_msg(&self, Client* client)
         case LOGIN:
             self.process_msg_login(client, now, body);
         case SUBSCRIBE_TO_SERVICE:
+            self.process_msg_subscribe_to_service(client, now, body);
         case CLIENT_ADDED_TO_SERVICE:
         case CLIENT_REMOVED_FROM_SERVICE:
         case MSG_TO_ALL_CLIENTS:
