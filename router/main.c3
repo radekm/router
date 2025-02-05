@@ -473,6 +473,21 @@ fn void Router.handle_error_when_receiving_or_sending(&self, Client* client, boo
     self.mark_client_for_closing(client, "Error %d when %s: %s", errno, action, libc::strerror(errno));
 }
 
+// Returns `true` if the response has been successfully enqueued.
+fn bool Router.enqueue_awaited_response(&self, Client* client, AwaitedResponse response)
+{
+    if (client.awaited_responses.can_enqueue())
+    {
+        client.awaited_responses.enqueue(response);
+        return true;
+    }
+    else
+    {
+        self.mark_client_for_closing(client, "Too many awaited responses");
+        return false;
+    }
+}
+
 fn void Router.enqueue_pings(&self)
 {
     ulong now = get_monotonic_event_time_us();
@@ -491,17 +506,10 @@ fn void Router.enqueue_pings(&self)
         if (self.enqueue_pending_msg(client, msg))
         {
             // PING has been enqueued. Add PONG to awaited responses.
-            if (client.awaited_responses.can_enqueue())
-            {
-                client.awaited_responses.enqueue({
-                    .msg_type = PONG,
-                    .request_enqueued_by_router_us = now,
-                });
-            }
-            else
-            {
-                self.mark_client_for_closing(client, "Too many awaited responses");
-            }
+            self.enqueue_awaited_response(client, {
+                .msg_type = PONG,
+                .request_enqueued_by_router_us = now,
+            });
         }
     }
 
