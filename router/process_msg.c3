@@ -142,6 +142,36 @@ fn void Router.process_msg_login(&self, Client* client, ulong now, char[] body)
     io::eprintfn("Client '%s' logged in as service '%s'", client.addr, service_name);
 }
 
+fn void Router.process_msg_pong(&self, Client* client)
+{
+    if (client.state != READY)
+    {
+        self.mark_client_for_closing(client, "Not expected pong message from client in state %s", client.state);
+        return;
+    }
+    if (client.awaited_responses.written == 0)
+    {
+        self.mark_client_for_closing(client, "Got pong but no response is awaited");
+        return;
+    }
+    AwaitedResponse awaited_response = client.awaited_responses.dequeue();
+    if (awaited_response.msg_type != PONG)
+    {
+        self.mark_client_for_closing(client, "Got pong but awaiting %s", awaited_response.msg_type);
+        return;
+    }
+    bool header_ok =
+        client.header.enqueued_by_router_us == awaited_response.request_enqueued_by_router_us &&
+        client.header.flags == 0 &&
+        client.header.body_size == 0 &&
+        (ulong)client.header.instance_id == 0;
+    if (!header_ok)
+    {
+        self.mark_client_for_closing(client, "Invalid pong header");
+        return;
+    }
+}
+
 fn void Router.process_msg(&self, Client* client)
 {
     if (client.header.msg_type >= MsgType.values.len)
@@ -164,8 +194,9 @@ fn void Router.process_msg(&self, Client* client)
         case MSG_TO_ALL_CLIENTS:
         case MSG_TO_ONE_CLIENT:
         case REQUEST:
-        case PONG:
             abort("TODO: Process received message of type %s", msg_type);
+        case PONG:
+            self.process_msg_pong(client);
 
         case CONNECTED_TO_SERVICE:
         case DISCONNECTED_FROM_SERVICE:
