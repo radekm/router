@@ -17,10 +17,15 @@ const int MAX_SERVICE_NAMES = 65_535;
 const int MAX_CLIENTS = 512;
 // Maximum number of messages that can be waiting in a queue to be sent to a single client.
 // Trying to enqueue an additional message causes disconnect of the client.
-const int MAX_PENDING_MESSAGES = 5000;
+const int MAX_PENDING_MESSAGES = 5000;  // Must be at least `MAX_CLIENTS`.
 // Maximum number of responses that can be awaited from a single client.
 // Trying to await an additional response causes disconnect of the client.
-const int MAX_AWAITED_RESPONSES = 128;
+// In theory, when a service starts at most `MAX_CLIENTS - 1` clients can be subscribed
+// to it. This means we have to be able to store `MAX_CLIENTS - 1`
+// awaited responses `CLIENT_ADDED_TO_SERVICE`. Additionally, immediatelly after
+// the service transitions to `READY` state it may get `PING` so we have to store
+// awaited response `PONG`.
+const int MAX_AWAITED_RESPONSES = MAX_CLIENTS;  // Must be at least `MAX_CLIENTS`.
 const int INTERVAL_BETWEEN_PINGS_US = 5_000_000;
 const int INTERVAL_BETWEEN_CHECKING_RESPONSES_US = 5_000_000;
 const int MAX_RESPONSE_TIME_US = 5_000_000;

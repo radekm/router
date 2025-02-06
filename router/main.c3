@@ -279,9 +279,27 @@ fn void Router.add_client(&self, NativeSocket client_socket, ZString host, ZStri
     });
 }
 
+// For zero `service_id` returns empty string.
+fn String Router.get_service_name(&self, ServiceId service_id)
+{
+    if ((uint)service_id == 0) return "";
+    if ((uint)service_id > self.service_id_to_name.len()) abort("Service id out of range");
+    String name = self.service_id_to_name[(usz)service_id - 1];
+    if (name == "") abort("Empty service name");
+    return name;
+}
+
 macro void Router.mark_client_for_closing(&self, Client* client, String $reason, ...)
 {
-    io::eprintfn("CLIENT ERROR: Marking client '%s' for closing: " +++ $reason, client.addr, $vasplat);
+    io::eprintfn(
+        "CLIENT ERROR: Marking client for closing " +++
+            "(instance %d, state '%s', addr '%s', service: '%s'): " +++
+            $reason,
+        (ulong)client.instance_id,
+        client.state,
+        client.addr,
+        self.get_service_name(client.service_id),
+        $vasplat);
 
     if (client.state == NOT_INITIALIZED) abort("Cannot mark uninitialized client for closing");
     if (client.state != WAITING_FOR_CLOSE)
@@ -361,7 +379,7 @@ fn bool Router.enqueue_pending_msg(&self, Client* client, SharedPendingMessage* 
 {
     if (!client.pending_messages.can_enqueue())
     {
-        router.mark_client_for_closing(client, "Too many pending messages");
+        self.mark_client_for_closing(client, "Too many pending messages");
         return false;
     }
 

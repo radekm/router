@@ -31,7 +31,16 @@ fn ServiceId Router.intern_service_name(&self, String service_name)
     return new;
 }
 
-fn void Router.enqueue_msg_and_response_add_client_to_service(&self, ulong now, Client* service, ClientInstanceId client)
+fn Subscription*! Router.find_subscription_by_service_id(&self, Client* client, ServiceId service_id)
+{
+    foreach (&subscription : client.subscriptions.entries[:client.subscriptions.size])
+    {
+        if (subscription.service == service_id) return subscription;
+    }
+    return SearchResult.MISSING?;
+}
+
+fn bool Router.enqueue_msg_and_response_add_client_to_service(&self, ulong now, Client* service, ClientInstanceId client)
 {
     SharedPendingMessage* msg = mem::new_with_padding(SharedPendingMessage, 0);
     msg.header = {
@@ -41,8 +50,31 @@ fn void Router.enqueue_msg_and_response_add_client_to_service(&self, ulong now, 
     };
     if (self.enqueue_pending_msg(service, msg))
     {
-        self.enqueue_awaited_response(service, {
+        return self.enqueue_awaited_response(service, {
             .msg_type = CLIENT_ADDED_TO_SERVICE,
+            .request_enqueued_by_router_us = now,
+            .instance_id = client,
+        });
+    }
+    else
+    {
+        free(msg);
+        return false;
+    }
+}
+
+fn void Router.enqueue_msg_and_response_remove_client_from_service(&self, ulong now, Client* service, ClientInstanceId client)
+{
+    SharedPendingMessage* msg = mem::new_with_padding(SharedPendingMessage, 0);
+    msg.header = {
+        .enqueued_by_router_us = now,
+        .msg_type = MsgType.REMOVE_CLIENT_FROM_SERVICE.ordinal,
+        .instance_id = client,
+    };
+    if (self.enqueue_pending_msg(service, msg))
+    {
+        self.enqueue_awaited_response(service, {
+            .msg_type = CLIENT_REMOVED_FROM_SERVICE,
             .request_enqueued_by_router_us = now,
             .instance_id = client,
         });
@@ -53,31 +85,130 @@ fn void Router.enqueue_msg_and_response_add_client_to_service(&self, ulong now, 
     }
 }
 
+fn bool Router.check_if_message_is_expected_and_header(&self, Client* client, MsgType msg_type)
+{
+    // Check client state and whether it's a service.
+    switch (msg_type)
+    {
+        case LOGIN:
+            if (client.state != WAITING_FOR_LOGIN)
+            {
+                self.mark_client_for_closing(client, "Not expected %s message", msg_type);
+                return false;
+            }
+
+        // Only services can send these messages.
+        case CLIENT_ADDED_TO_SERVICE:
+        case CLIENT_REMOVED_FROM_SERVICE:
+        case MSG_TO_ALL_CLIENTS:
+        case MSG_TO_ONE_CLIENT:
+            if (client.state != READY || client.service_id == 0)
+            {
+                self.mark_client_for_closing(client, "Not expected %s message", msg_type);
+                return false;
+            }
+
+        // Any client can send these messages.
+        case SUBSCRIBE_TO_SERVICE:
+        case REQUEST:
+        case PONG:
+            if (client.state != READY)
+            {
+                self.mark_client_for_closing(client, "Not expected %s message", msg_type);
+                return false;
+            }
+
+        // The following messages can only be sent by router.
+        case CONNECTED_TO_SERVICE:
+        case DISCONNECTED_FROM_SERVICE:
+        case ADD_CLIENT_TO_SERVICE:
+        case REMOVE_CLIENT_FROM_SERVICE:
+        case PING:
+            self.mark_client_for_closing(client, "Client sent message of invalid type %s", msg_type);
+            return false;
+    }
+
+    // Check header. If desirable check it against awaited response.
+    switch (msg_type)
+    {
+        // Check against awaited response.
+        case LOGIN:
+        case CLIENT_ADDED_TO_SERVICE:
+        case CLIENT_REMOVED_FROM_SERVICE:
+        case PONG:
+            if (client.awaited_responses.written == 0)
+            {
+                self.mark_client_for_closing(client, "Got %s but no response is awaited", msg_type);
+                return false;
+            }
+            AwaitedResponse awaited_response = client.awaited_responses.dequeue();
+            if (awaited_response.msg_type != msg_type)
+            {
+                self.mark_client_for_closing(client, "Got %s but awaiting %s", msg_type, awaited_response.msg_type);
+                return false;
+            }
+
+            // Check if data from the header match data from the awaited response.
+            bool header_ok = true;
+            header_ok = header_ok && client.header.enqueued_by_router_us ==
+                (msg_type == PONG ? awaited_response.request_enqueued_by_router_us : 0);
+            header_ok = header_ok && client.header.flags == 0;
+            header_ok = header_ok &&
+                (msg_type == LOGIN ? client.header.body_size > 0 : client.header.body_size == 0);
+            if (msg_type == CLIENT_ADDED_TO_SERVICE || msg_type == CLIENT_REMOVED_FROM_SERVICE)
+            {
+                // NOTE: `process_msg_*` function must still verify whether the client still exists.
+                header_ok = header_ok && client.header.instance_id == awaited_response.instance_id;
+            }
+            else
+            {
+                header_ok = header_ok && (ulong)client.header.instance_id == 0;
+            }
+
+            if (!header_ok)
+            {
+                self.mark_client_for_closing(client, "Invalid %s header", msg_type);
+                return false;
+            }
+
+        case MSG_TO_ALL_CLIENTS:
+        case MSG_TO_ONE_CLIENT:
+        case SUBSCRIBE_TO_SERVICE:
+        case REQUEST:
+            bool header_ok = true;
+            header_ok = header_ok && client.header.enqueued_by_router_us == 0;
+            header_ok = header_ok && client.header.flags == 0;
+            // Empty body of message (`MSG_TO_ALL_CLIENTS`, `MSG_TO_ONE_CLIENT`, `REQUEST`) doesn't make sense.
+            header_ok = header_ok &&  client.header.body_size > 0;
+            if (msg_type == MSG_TO_ONE_CLIENT || msg_type == REQUEST)
+            {
+                // Concrete client or service must be specified.
+                // NOTE: `process_msg_*` function must still verify whether the client still exists
+                //       and in case of `REQUEST` whether the client is a service.
+                header_ok = header_ok && (ulong)client.header.instance_id != 0;
+            }
+            else
+            {
+                header_ok = header_ok && (ulong)client.header.instance_id == 0;
+            }
+
+            if (!header_ok)
+            {
+                self.mark_client_for_closing(client, "Invalid %s header", msg_type);
+                return false;
+            }
+
+        default:
+    }
+
+    return true;
+}
+
 fn void Router.process_msg_login(&self, Client* client, ulong now, char[] body)
 {
-    if (client.state != WAITING_FOR_LOGIN)
+    if (client.awaited_responses.written != 0)
     {
-        self.mark_client_for_closing(client, "Not expected login message");
-        return;
-    }
-    if (client.awaited_responses.written != 1)
-    {
-        abort("Router has inconsistent state: Client WAITING_FOR_LOGIN has corrupted awaited_responses");
-    }
-    AwaitedResponse awaited_response = client.awaited_responses.dequeue();
-    if (awaited_response.msg_type != LOGIN)
-    {
-        abort("Router has inconsistent state: First awaited_response doesn't have type LOGIN");
-    }
-    bool header_ok =
-        client.header.enqueued_by_router_us == 0 &&
-        client.header.flags == 0 &&
-        body.len > 0 &&
-        (ulong)client.header.instance_id == 0;
-    if (!header_ok)
-    {
-        self.mark_client_for_closing(client, "Invalid login header");
-        return;
+        abort("Router has inconsistent state: Client WAITING_FOR_LOGIN had more than one awaited response");
     }
 
     // Read login message body.
@@ -131,17 +262,19 @@ fn void Router.process_msg_login(&self, Client* client, ulong now, char[] body)
     {
         if (existing_client.state != READY) continue;
 
-        foreach (&subscription : existing_client.subscriptions.entries[:existing_client.subscriptions.size])
+        if (try subscription = self.find_subscription_by_service_id(existing_client, service_id))
         {
-            if (subscription.service != service_id) continue;
             if((ulong)subscription.instance_id != 0)
             {
                 abort("Router has inconsistent state: Client is connected to service which doesn't exist");
             }
 
-            self.enqueue_msg_and_response_add_client_to_service(now, client, existing_client.instance_id);
-
-            break;
+            // Both queues `pending_messages` and `awaited_responses` should have enough space
+            // because the service has just started.
+            if (!self.enqueue_msg_and_response_add_client_to_service(now, client, existing_client.instance_id))
+            {
+                abort("Router has inconsistent state: Queues don't have enough space after login");
+            }
         }
     }
 
@@ -151,11 +284,6 @@ fn void Router.process_msg_login(&self, Client* client, ulong now, char[] body)
 
 fn void Router.process_msg_subscribe_to_service(&self, Client* client, ulong now, char[] body)
 {
-    if (client.state != READY)
-    {
-        self.mark_client_for_closing(client, "Not expected subscribe to service message from client in state %s", client.state);
-        return;
-    }
     if (client.subscriptions.size == MAX_SUBSCRIPTIONS)
     {
         self.mark_client_for_closing(client, "Too many subscriptions");
@@ -168,7 +296,7 @@ fn void Router.process_msg_subscribe_to_service(&self, Client* client, ulong now
         (ulong)client.header.instance_id == 0;
     if (!header_ok)
     {
-        self.mark_client_for_closing(client, "Invalid subscribe to service header");
+        self.mark_client_for_closing(client, "Invalid SUBSCRIBE_TO_SERVICE header");
         return;
     }
 
@@ -181,7 +309,7 @@ fn void Router.process_msg_subscribe_to_service(&self, Client* client, ulong now
         service_name.len <= MAX_SERVICE_NAME_LEN;
     if (!body_ok)
     {
-        self.mark_client_for_closing(client, "Invalid subscribe to service body");
+        self.mark_client_for_closing(client, "Invalid SUBSCRIBE_TO_SERVICE body");
         return;
     }
 
@@ -192,13 +320,13 @@ fn void Router.process_msg_subscribe_to_service(&self, Client* client, ulong now
     {
         if (subscription.service == service_id)
         {
-            self.mark_client_for_closing(client, "Client already subscribed to service");
+            self.mark_client_for_closing(client, "Client already subscribed to service '%s'", service_name);
             return;
         }
     }
 
     // Add subscription.
-    client.subscriptions.push({ .service = service_id });
+    client.subscriptions.push_try({ .service = service_id })!!;
 
     // If the service exists, then send `ADD_CLIENT_TO_SERVICE` to it.
     foreach (&existing_client : self.clients)
@@ -212,34 +340,60 @@ fn void Router.process_msg_subscribe_to_service(&self, Client* client, ulong now
     }
 }
 
+fn void Router.process_msg_client_added_to_service(&self, Client* service, ulong now, char[] body)
+{
+    Client* client = &self.clients[service.header.instance_id.idx];
+
+    // Client either doesn't exist anymore or it's `WAITING_FOR_CLOSE`.
+    if (client.state != READY || client.instance_id != service.header.instance_id)
+    {
+        // Ask the service to remove the client.
+        self.enqueue_msg_and_response_remove_client_from_service(now, service, service.header.instance_id);
+        return;
+    }
+
+    // At this point the client is subscribed.
+
+    // Add the new subscriber to the service.
+    service.subscribers.push_try(client.instance_id)!!;
+
+    // Add service instance id to the subscription.
+    if (try subscription = self.find_subscription_by_service_id(client, service.service_id))
+    {
+        if ((ulong)subscription.instance_id != 0)
+        {
+            abort("Router has inconsistent state: Subscription to service '%s' contains instance id %d",
+                self.get_service_name(service.service_id), (ulong)subscription.instance_id);
+        }
+        subscription.instance_id = service.instance_id;
+    }
+    else
+    {
+        abort("Router has inconsistent state: Missing subscription to service '%s'",
+            self.get_service_name(service.service_id));
+    }
+
+    // Enqueue notification `CONNECTED_TO_SERVICE` to the client.
+    String service_name = self.get_service_name(service.service_id);
+    uint body_size = 1 + service_name.len;
+    SharedPendingMessage* msg = mem::new_with_padding(SharedPendingMessage, body_size);
+    msg.header = {
+        .enqueued_by_router_us = now,
+        .msg_type = MsgType.CONNECTED_TO_SERVICE.ordinal,
+        .body_size = body_size,
+        .instance_id = service.instance_id,
+    };
+    msg.body[0] = (char)service_name.len;
+    mem::copy(&msg.body[1], &service_name[0], service_name.len);
+    if (!self.enqueue_pending_msg(client, msg))
+    {
+        free(msg);
+    }
+}
+
 fn void Router.process_msg_pong(&self, Client* client)
 {
-    if (client.state != READY)
-    {
-        self.mark_client_for_closing(client, "Not expected pong message from client in state %s", client.state);
-        return;
-    }
-    if (client.awaited_responses.written == 0)
-    {
-        self.mark_client_for_closing(client, "Got pong but no response is awaited");
-        return;
-    }
-    AwaitedResponse awaited_response = client.awaited_responses.dequeue();
-    if (awaited_response.msg_type != PONG)
-    {
-        self.mark_client_for_closing(client, "Got pong but awaiting %s", awaited_response.msg_type);
-        return;
-    }
-    bool header_ok =
-        client.header.enqueued_by_router_us == awaited_response.request_enqueued_by_router_us &&
-        client.header.flags == 0 &&
-        client.header.body_size == 0 &&
-        (ulong)client.header.instance_id == 0;
-    if (!header_ok)
-    {
-        self.mark_client_for_closing(client, "Invalid pong header");
-        return;
-    }
+    // Nothing to do.
 }
 
 fn void Router.process_msg(&self, Client* client)
@@ -249,11 +403,12 @@ fn void Router.process_msg(&self, Client* client)
         self.mark_client_for_closing(client, "Client sent message of unknown type %d", client.header.msg_type);
         return;
     }
+    MsgType msg_type = MsgType.from_ordinal(client.header.msg_type);
+
+    if (!self.check_if_message_is_expected_and_header(client, msg_type)) return;
 
     ulong now = get_monotonic_event_time_us();
-
-    MsgType msg_type = MsgType.from_ordinal(client.header.msg_type);
-    char[] body = client.body[:client.header.body_size];  // TODO: Check if this works when `body == null`.
+    char[] body = client.body[:client.header.body_size];
     switch (msg_type)
     {
         case LOGIN:
@@ -261,6 +416,7 @@ fn void Router.process_msg(&self, Client* client)
         case SUBSCRIBE_TO_SERVICE:
             self.process_msg_subscribe_to_service(client, now, body);
         case CLIENT_ADDED_TO_SERVICE:
+            self.process_msg_client_added_to_service(client, now, body);
         case CLIENT_REMOVED_FROM_SERVICE:
         case MSG_TO_ALL_CLIENTS:
         case MSG_TO_ONE_CLIENT:
@@ -274,8 +430,7 @@ fn void Router.process_msg(&self, Client* client)
         case ADD_CLIENT_TO_SERVICE:
         case REMOVE_CLIENT_FROM_SERVICE:
         case PING:
-            self.mark_client_for_closing(client, "Client sent message of invalid type %s", msg_type);
-            return;
+            abort("check_if_message_is_expected_and_header is not working");
     }
 
     // Free successfully processed message.
