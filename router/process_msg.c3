@@ -391,6 +391,25 @@ fn void Router.process_msg_client_added_to_service(&self, Client* service, ulong
     }
 }
 
+fn void Router.process_msg_client_removed_from_service(&self, Client* service, ulong now, char[] body)
+{
+    // Clients can't unsubcribe. So the only situation when router sends
+    // `REMOVE_CLIENT_FROM_SERVICE` and awaits response `CLIENT_REMOVED_FROM_SERVICE`
+    // is when a client socket is closed. So in this case we don't have to notify the client
+    // because it doesn't exist when `CLIENT_REMOVED_FROM_SERVICE` is received.
+
+    // Check that the client really doesn't exist.
+    Client* client = &self.clients[service.header.instance_id.idx];
+    if (client.instance_id == service.header.instance_id)
+    {
+        abort("Got CLIENT_REMOVED_FROM_SERVICE while client still exists");
+    }
+
+    // Because we removed the client from the subscribers
+    // of the service when enqueuing `REMOVE_CLIENT_FROM_SERVICE`
+    // we don't need to do it here.
+}
+
 fn void Router.process_msg_pong(&self, Client* client)
 {
     // Nothing to do.
@@ -418,6 +437,7 @@ fn void Router.process_msg(&self, Client* client)
         case CLIENT_ADDED_TO_SERVICE:
             self.process_msg_client_added_to_service(client, now, body);
         case CLIENT_REMOVED_FROM_SERVICE:
+            self.process_msg_client_removed_from_service(client, now, body);
         case MSG_TO_ALL_CLIENTS:
         case MSG_TO_ONE_CLIENT:
         case REQUEST:
