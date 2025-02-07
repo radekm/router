@@ -40,6 +40,15 @@ fn Subscription*! Router.find_subscription_by_service_id(&self, Client* client, 
     return SearchResult.MISSING?;
 }
 
+fn Subscription*! Router.find_subscription_by_instance_id(&self, Client* client, ClientInstanceId instance_id)
+{
+    foreach (&subscription : client.subscriptions.entries[:client.subscriptions.size])
+    {
+        if (subscription.instance_id == instance_id) return subscription;
+    }
+    return SearchResult.MISSING?;
+}
+
 fn bool Router.enqueue_msg_and_response_add_client_to_service(&self, ulong now, Client* service, ClientInstanceId client)
 {
     SharedPendingMessage* msg = mem::new_with_padding(SharedPendingMessage, 0);
@@ -410,6 +419,103 @@ fn void Router.process_msg_client_removed_from_service(&self, Client* service, u
     // we don't need to do it here.
 }
 
+fn void Router.process_msg_to_all_clients(&self, Client* service, ulong now, char[] body)
+{
+    SharedPendingMessage* msg = mem::new_with_padding(SharedPendingMessage, body.len);
+    msg.header = {
+        .enqueued_by_router_us = now,
+        .msg_type = MsgType.MSG_TO_ALL_CLIENTS.ordinal,
+        .body_size = body.len,
+        .instance_id = service.instance_id,
+    };
+    msg.body[:body.len] = body[..];
+    foreach (ClientInstanceId subscriber : service.subscribers.entries[:service.subscribers.size])
+    {
+        Client* subscriber_client = &self.clients[subscriber.idx];
+
+        if (subscriber_client.instance_id != subscriber)
+        {
+            abort("Router has inconsistent state: Subscriber doesn't exist");
+        }
+        if (subscriber_client.state == WAITING_FOR_CLOSE) continue;  // Subscriber is marked for closing.
+        if (subscriber_client.state != READY) abort("Subscriber has invalid state");
+
+        self.enqueue_pending_msg(subscriber_client, msg);
+    }
+    if (msg.ref_count == 0)
+    {
+        free(msg);
+    }
+}
+
+fn void Router.process_msg_to_one_client(&self, Client* service, ulong now, char[] body)
+{
+    // CONSIDER: Instead of searching among subscribers we could go into the client
+    //           and check its subscriptions. This could be faster
+    //           because there could be `MAX_CLIENTS` subscribers
+    //           but only `MAX_SUBSCRIPTIONS` subscriptions.
+
+    // It may happen that the subscriber doesn't exist.
+    // If the subscriber is closed router sends `REMOVE_CLIENT_FROM_SERVICE`.
+    // But before the service processes `REMOVE_CLIENT_FROM_SERVICE`,
+    // it may send `MSG_TO_ONE_CLIENT` to router.
+    // This scenario is ok. We just ignore the message.
+    if (!service.subscribers.contains(service.header.instance_id)) return;
+
+    Client* subscriber_client = &self.clients[service.header.instance_id.idx];
+    if (subscriber_client.instance_id != service.header.instance_id)
+    {
+        abort("Router has inconsistent state: Subscriber doesn't exist");
+    }
+    if (subscriber_client.state == WAITING_FOR_CLOSE) return;  // Subscriber is marked for closing.
+    if (subscriber_client.state != READY) abort("Subscriber has invalid state");
+
+    // We have found the subscriber.
+    SharedPendingMessage* msg = mem::new_with_padding(SharedPendingMessage, body.len);
+    msg.header = {
+        .enqueued_by_router_us = now,
+        .msg_type = MsgType.MSG_TO_ONE_CLIENT.ordinal,
+        .body_size = body.len,
+        .instance_id = service.instance_id,
+    };
+    msg.body[:body.len] = body[..];
+    if (!self.enqueue_pending_msg(subscriber_client, msg))
+    {
+        free(msg);
+    }
+}
+
+fn void Router.process_msg_request(&self, Client* client, ulong now, char[] body)
+{
+    // Check that the client is subscribed to service.
+    // Currently we don't know service id so we search subscriptions by its instance id.
+    Subscription*! subscription = self.find_subscription_by_instance_id(client, client.header.instance_id);
+    // It's ok if the subscription doesn't exist.
+    if (catch subscription) return;
+
+    Client* service = &self.clients[client.header.instance_id.idx];
+    if (service.instance_id != subscription.instance_id || service.service_id != subscription.service)
+    {
+        abort("Router has inconsistent state: Values from Subscription don't match values from Client");
+    }
+    if (service.state == WAITING_FOR_CLOSE) return;  // Service is marked for closing.
+    if (service.state != READY) abort("Service has invalid state");
+
+    // We have found the service.
+    SharedPendingMessage* msg = mem::new_with_padding(SharedPendingMessage, body.len);
+    msg.header = {
+        .enqueued_by_router_us = now,
+        .msg_type = MsgType.REQUEST.ordinal,
+        .body_size = body.len,
+        .instance_id = client.instance_id,
+    };
+    msg.body[:body.len] = body[..];
+    if (!self.enqueue_pending_msg(service, msg))
+    {
+        free(msg);
+    }
+}
+
 fn void Router.process_msg_pong(&self, Client* client)
 {
     // Nothing to do.
@@ -439,9 +545,11 @@ fn void Router.process_msg(&self, Client* client)
         case CLIENT_REMOVED_FROM_SERVICE:
             self.process_msg_client_removed_from_service(client, now, body);
         case MSG_TO_ALL_CLIENTS:
+            self.process_msg_to_all_clients(client, now, body);
         case MSG_TO_ONE_CLIENT:
+            self.process_msg_to_one_client(client, now, body);
         case REQUEST:
-            abort("TODO: Process received message of type %s", msg_type);
+            self.process_msg_request(client, now, body);
         case PONG:
             self.process_msg_pong(client);
 
