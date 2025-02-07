@@ -569,6 +569,8 @@ fn void Router.close_clients_waiting_for_it(&self)
 {
     while (self.clients_waiting_for_close.written > 0)
     {
+        ulong now = get_monotonic_event_time_us();
+
         ClientInstanceId instance_id = self.clients_waiting_for_close.dequeue();
         Client* client = &router.clients[instance_id.idx];
         io::eprintfn("Closing client '%s'", client.addr);
@@ -582,8 +584,91 @@ fn void Router.close_clients_waiting_for_it(&self)
         }
         (void)client.socket.close();
 
-        // TODO: Notify services to which the client is subscribed.
-        // TODO: If this is a service, then notify clients that are subscribed to it.
+        // Notify services to which the client is subscribed and remove the subscriber.
+        //
+        // We don't use `enqueue_msg_and_response_remove_client_from_service` because
+        // we want to reuse a single message and send it to all services.
+        {
+            SharedPendingMessage* msg = mem::new_with_padding(SharedPendingMessage, 0);
+            msg.header = {
+                .enqueued_by_router_us = now,
+                .msg_type = MsgType.REMOVE_CLIENT_FROM_SERVICE.ordinal,
+                .instance_id = client.instance_id,
+            };
+            foreach (&subscription : client.subscriptions.entries[:client.subscriptions.size])
+            {
+                // Client is not connected to any instance of the service.
+                if ((ulong)subscription.instance_id == 0) continue;
+
+                Client* service = &self.clients[subscription.instance_id.idx];
+                // Service doesn't exist anymore.
+                if (service.state != READY || service.instance_id != subscription.instance_id) continue;
+                if (self.enqueue_pending_msg(service, msg))
+                {
+                    AwaitedResponse response = {
+                        .msg_type = CLIENT_REMOVED_FROM_SERVICE,
+                        .request_enqueued_by_router_us = now,
+                        .instance_id = client.instance_id,
+                    };
+                    if (self.enqueue_awaited_response(service, response))
+                    {
+                        // Everything has been enqueued, remove the subscriber.
+                        if (!service.subscribers.remove_first_item(client.instance_id))
+                        {
+                            abort("Router has inconsistent state: Subscriber not found");
+                        }
+                    }
+                }
+            }
+            if (msg.ref_count == 0)
+            {
+                free(msg);
+            }
+        }
+
+        // If the client is a service, then notify the clients that are subscribed to it.
+        if ((uint)client.service_id != 0)
+        {
+            String service_name = self.get_service_name(client.service_id);
+            uint body_size = 1 + service_name.len;
+            SharedPendingMessage* msg = mem::new_with_padding(SharedPendingMessage, body_size);
+            msg.header = {
+                .enqueued_by_router_us = now,
+                .msg_type = MsgType.DISCONNECTED_FROM_SERVICE.ordinal,
+                .body_size = body_size,
+                .instance_id = client.instance_id,
+            };
+            msg.body[0] = (char)service_name.len;
+            mem::copy(&msg.body[1], &service_name[0], service_name.len);
+            foreach (ClientInstanceId subscriber : client.subscribers.entries[:client.subscribers.size])
+            {
+                Client* subscriber_client = &self.clients[subscriber.idx];
+                // Subscriber doesn't exist anymore.
+                if (subscriber_client.state != READY || subscriber_client.instance_id != subscriber) continue;
+
+                // Notify the subscriber that it's no longer connected to service
+                // and zero instance id of the service.
+                if (self.enqueue_pending_msg(subscriber_client, msg))
+                {
+                    if (try subscription = self.find_subscription_by_service_id(subscriber_client, client.service_id))
+                    {
+                        if (subscription.instance_id != client.instance_id)
+                        {
+                            abort("Router has inconsistent state: Subscription to different instance of service");
+                        }
+                        subscription.instance_id = (ClientInstanceId)(ulong)0;
+                    }
+                    else
+                    {
+                        abort("Router has inconsistent state: Missing subscription to service");
+                    }
+                }
+            }
+            if (msg.ref_count == 0)
+            {
+                free(msg);
+            }
+        }
 
         client.destroy();
     }
