@@ -186,7 +186,10 @@ fn void main()
 
                 Client* client = &router.clients[instance_id.idx];
 
-                if (client.state == NOT_INITIALIZED) abort("Got event for client which is not initialized");
+                if (client.state == NOT_INITIALIZED)
+                {
+                    abort("Got event for client which is not initialized (instance %d)", (ulong)instance_id);
+                }
                 if (client.instance_id != instance_id) abort("Actual instance id differs from epoll instance id");
 
                 // Ignore event if client is `WAITING_FOR_CLOSE`.
@@ -572,13 +575,18 @@ fn void Router.close_clients_waiting_for_it(&self)
         ulong now = get_monotonic_event_time_us();
 
         ClientInstanceId instance_id = self.clients_waiting_for_close.dequeue();
-        Client* client = &router.clients[instance_id.idx];
-        io::eprintfn("Closing client '%s'", client.addr);
+        Client* client = &self.clients[instance_id.idx];
+        io::eprintfn(
+            "Closing client (instance %d, state '%s', addr '%s', service: '%s')",
+            (ulong)client.instance_id,
+            client.state,
+            client.addr,
+            self.get_service_name(client.service_id));
 
         if (client.state != WAITING_FOR_CLOSE) abort("Client waiting for close has invalid state");
         if (client.instance_id != instance_id) abort("Actual instance id differs from instance id to be closed");
 
-        if (epoll_ctl(self.epfd, EPOLL_CTL_DEL, client.socket, &&EPollEvent {}) == -1)
+        if (epoll_ctl(self.epfd, EPOLL_CTL_DEL, client.socket, null) == -1)
         {
             abort_with_errno("Failed to remove client socket from epoll");
         }

@@ -242,7 +242,7 @@ fn void Router.process_msg_login(&self, Client* client, ulong now, char[] body)
     if (service_name.len == 0)
     {
         client.state = READY;
-        io::eprintfn("Client '%s' logged in", client.addr);
+        io::eprintfn("Client logged in (instance %d, addr '%s')", (ulong)client.instance_id, client.addr);
         return;
     }
 
@@ -288,7 +288,11 @@ fn void Router.process_msg_login(&self, Client* client, ulong now, char[] body)
     }
 
     client.state = READY;
-    io::eprintfn("Client '%s' logged in as service '%s'", client.addr, service_name);
+    io::eprintfn(
+        "Client logged in as service (instance %d, addr '%s', service: '%s')",
+        (ulong)client.instance_id,
+        client.addr,
+        service_name);
 }
 
 fn void Router.process_msg_subscribe_to_service(&self, Client* client, ulong now, char[] body)
