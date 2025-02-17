@@ -5,8 +5,8 @@ import std::net::os;
 
 // Login message is smaller than other messages
 // to prevent exhausting memory by clients that aren't logged in.
-const int MAX_LOGIN_MSG_SIZE = 512;
-const int MAX_MSG_SIZE = 10_000_000;
+const int MAX_LOGIN_MSG_BODY_SIZE = 512;
+const int MAX_MSG_BODY_SIZE = 10_000_000;
 // Maximum number of services a single client can subscribe to.
 const int MAX_SUBSCRIPTIONS = 32;
 const int MAX_SERVICE_NAME_LEN = 64;

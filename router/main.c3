@@ -341,7 +341,7 @@ fn bool Router.receive_msg(&self, Client* client)
         // Allocate buffer for the body.
         if (client.body == null)
         {
-            uint max_body_size = client.state == WAITING_FOR_LOGIN ? MAX_LOGIN_MSG_SIZE : MAX_MSG_SIZE;
+            uint max_body_size = client.state == WAITING_FOR_LOGIN ? MAX_LOGIN_MSG_BODY_SIZE : MAX_MSG_BODY_SIZE;
             if (client.header.body_size > max_body_size)
             {
                 self.mark_client_for_closing(client, "Client sent too big body %d", client.header.body_size);
