@@ -31,7 +31,9 @@ fn Config parse_config()
         int port = obj.get_int("port") ?? abort("Unable to read port");
 
         Config config;
-        config.host = host.zstr_copy();  // Call copy after processing entire config.
+        // Call copy after processing entire config.
+        // Because we don't want to allocate until we're sure that processing succeeds.
+        config.host = host.zstr_copy();
         config.port = port;
 
         return config;
@@ -420,6 +422,7 @@ fn void Router.send_pending_msg(&self, Client* client)
         }
 
         SharedPendingMessage* msg = client.pending_messages.peek();
+        if (msg.ref_count == 0) abort("Router has inconsistent state: Pending message has ref count 0");
         int msg_size = MsgHeader.sizeof + msg.header.body_size;
         int remaining_size = msg_size - client.sent_from_message;
         if (remaining_size < 0) abort("Router has inconsistent state: Sent more bytes than message size");
@@ -690,6 +693,10 @@ fn void Client.destroy(&self)
     while (self.pending_messages.written > 0)
     {
         SharedPendingMessage* msg = self.pending_messages.dequeue();
+        if (msg.ref_count == 0)
+        {
+            abort("Router has inconsistent state: When destroying client pending message has ref count 0");
+        }
         msg.ref_count--;
         if (msg.ref_count == 0)
         {
