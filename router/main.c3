@@ -60,7 +60,7 @@ fn void main()
     @stack_mem(128; Allocator allocator)
     {
         DString port_str;
-        port_str.new_init(allocator: allocator);
+        port_str.init(allocator: allocator);
         port_str.appendf("%d", config.port);
 
         CInt error = os::getaddrinfo(config.host, port_str.zstr_view(), &hints, &ai);
