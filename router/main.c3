@@ -460,7 +460,9 @@ fn void Router.send_pending_msg(&self, Client* client)
             // We have to send the body.
             isz n = libc::send(
                 client.socket,
-                &msg.body + client.sent_from_message - MsgHeader.sizeof,
+                // NOTE: Following doesn't work `&msg.body + client.sent_from_message - MsgHeader.sizeof`,
+                //       it behaves same as `&msg.body` (maybe because `body` has type char[?] which has size 0).
+                &msg.body[client.sent_from_message - MsgHeader.sizeof],
                 remaining_size,
                 0);
 
