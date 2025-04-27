@@ -20,19 +20,19 @@ extern fn CInt getnameinfo(
     char* serv, Socklen_t serv_len,
     CInt flags);
 
-distinct EPollFd = inline Fd;
+typedef EPollFd = inline Fd;
 
 fn void EPollFd.close(self)
 {
     libc::close(self);
 }
 
-distinct EPollCtl = CInt;
+typedef EPollCtl = CInt;
 const EPollCtl EPOLL_CTL_ADD = 1;
 const EPollCtl EPOLL_CTL_DEL = 2;
 const EPollCtl EPOLL_CTL_MOD = 3;
 
-distinct EPoll = uint;
+typedef EPoll = uint;
 const EPoll EPOLLIN = 0x001;
 const EPoll EPOLLOUT = 0x004;
 const EPoll EPOLLERR = 0x008;

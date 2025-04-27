@@ -22,7 +22,7 @@ fn ServiceId Router.intern_service_name(&self, String service_name)
 
     if (self.service_id_to_name.len() == MAX_SERVICE_NAMES) abort("Too many interned service names");
 
-    service_name = service_name.copy();
+    service_name = service_name.copy(mem);  // NOTE: We don't bother freeing this, it's freed by OS when program ends.
     self.service_id_to_name.push(service_name);
     ServiceId new = (ServiceId)self.service_id_to_name.len();
 
@@ -31,22 +31,22 @@ fn ServiceId Router.intern_service_name(&self, String service_name)
     return new;
 }
 
-fn Subscription*! Router.find_subscription_by_service_id(&self, Client* client, ServiceId service_id)
+fn Subscription*? Router.find_subscription_by_service_id(&self, Client* client, ServiceId service_id)
 {
     foreach (&subscription : client.subscriptions.entries[:client.subscriptions.size])
     {
         if (subscription.service == service_id) return subscription;
     }
-    return SearchResult.MISSING?;
+    return NOT_FOUND?;
 }
 
-fn Subscription*! Router.find_subscription_by_instance_id(&self, Client* client, ClientInstanceId instance_id)
+fn Subscription*? Router.find_subscription_by_instance_id(&self, Client* client, ClientInstanceId instance_id)
 {
     foreach (&subscription : client.subscriptions.entries[:client.subscriptions.size])
     {
         if (subscription.instance_id == instance_id) return subscription;
     }
-    return SearchResult.MISSING?;
+    return NOT_FOUND?;
 }
 
 fn bool Router.enqueue_msg_and_response_add_client_to_service(&self, ulong now, Client* service, ClientInstanceId client)
@@ -493,7 +493,7 @@ fn void Router.process_msg_request(&self, Client* client, ulong now, char[] body
 {
     // Check that the client is subscribed to service.
     // Currently we don't know service id so we search subscriptions by its instance id.
-    Subscription*! subscription = self.find_subscription_by_instance_id(client, client.header.instance_id);
+    Subscription*? subscription = self.find_subscription_by_instance_id(client, client.header.instance_id);
     // It's ok if the subscription doesn't exist.
     if (catch subscription) return;
 

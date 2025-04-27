@@ -2,7 +2,7 @@
 <*
  @require values::@is_int(SIZE) &&& SIZE > 0 "The size must be positive integer"
 *>
-module router::ringbuf(<Type, SIZE>);
+module router::ringbuf{Type, SIZE};
 
 struct RingBuf
 {

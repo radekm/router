@@ -57,7 +57,7 @@ struct SharedPendingMessage
 {
     uint ref_count;
     MsgHeader header;
-    char[?] body;
+    char[*] body;
 }
 
 // Represents a subscription of a client to a service.
@@ -93,11 +93,11 @@ struct Client
     // Services to which this client is subscribed.
     // This client may receive messages from these services and send requests to these services.
     // Doesn't contain duplicate services.
-    ElasticArray(<Subscription, MAX_SUBSCRIPTIONS>) subscriptions;
+    ElasticArray{Subscription, MAX_SUBSCRIPTIONS} subscriptions;
 
     // Ensures that the client is alive and responds promptly.
     // Responses must arrive in the same order as the requests.
-    RingBuf(<AwaitedResponse, MAX_AWAITED_RESPONSES>) awaited_responses;
+    RingBuf{AwaitedResponse, MAX_AWAITED_RESPONSES} awaited_responses;
 
     // For recieving messages from this client.
 
@@ -111,7 +111,7 @@ struct Client
     // `sent_from_message` is the number of bytes from the first message
     // in `pending_messages` queue that have been sent.
     int sent_from_message;
-    RingBuf(<SharedPendingMessage*, MAX_PENDING_MESSAGES>) pending_messages;
+    RingBuf{SharedPendingMessage*, MAX_PENDING_MESSAGES} pending_messages;
 
     // --------------------------------------------------------------
     // Following fields are used only if this client is a service.
@@ -123,11 +123,11 @@ struct Client
     // This is primarily useful when the service broadcasts a message and
     // also for notifying clients when the service terminates
     // Doesn't contain duplicate clients.
-    ElasticArray(<ClientInstanceId, MAX_CLIENTS>) subscribers;
+    ElasticArray{ClientInstanceId, MAX_CLIENTS} subscribers;
 }
 
 // When initialized != 0.
-distinct ServiceId = ushort;
+typedef ServiceId = ushort;
 
 // When initialized `unique` != 0.
 bitstruct ClientInstanceId : ulong
@@ -147,9 +147,9 @@ struct Router
     // Interning service names.
 
     // Owns service names.
-    List(<String>) service_id_to_name;
+    List{String} service_id_to_name;
     // Maps service names to service ids.
-    HashMap(<String, ServiceId>) service_name_to_id;
+    HashMap{String, ServiceId} service_name_to_id;
 
     // Currently connected clients.
 
@@ -164,7 +164,7 @@ struct Router
 
     // Queue of clients in `WAITING_FOR_CLOSE` state.
     // Closing one client may switch another client to `WAITING_FOR_CLOSE` state.
-    RingBuf(<ClientInstanceId, MAX_CLIENTS>) clients_waiting_for_close;
+    RingBuf{ClientInstanceId, MAX_CLIENTS} clients_waiting_for_close;
 }
 
 enum MsgType : ushort

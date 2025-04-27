@@ -25,7 +25,7 @@ fn Config parse_config()
     @pool()
     {
         char[] bytes = file::load_temp("config.json") ?? abort("Unable to open config.json file");
-        Object* obj = json::temp_parse_string((String)bytes) ?? abort("Unable to parse config.json file");
+        Object* obj = json::tparse_string((String)bytes) ?? abort("Unable to parse config.json file");
 
         String host = obj.get_string("host") ?? abort("Unable to read host");
         int port = obj.get_int("port") ?? abort("Unable to read port");
@@ -33,7 +33,7 @@ fn Config parse_config()
         Config config;
         // Call copy after processing entire config.
         // Because we don't want to allocate until we're sure that processing succeeds.
-        config.host = host.zstr_copy();
+        config.host = host.zstr_copy(mem);
         config.port = port;
 
         return config;
@@ -102,7 +102,7 @@ fn void main()
 
     // `EPollEvent.data.u64` contains `ClientInstanceId`.
     // This `ClientInstanceId` is `0` for server socket.
-    if (epoll_ctl(epfd, EPOLL_CTL_ADD, server_socket, &&EPollEvent { .events = EPOLLIN }) == -1)
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, server_socket, &&(EPollEvent) { .events = EPOLLIN }) == -1)
     {
         abort_with_errno("Server socket wasn't added to epoll");
     }
@@ -229,6 +229,10 @@ fn void Router.init(&self, NativeSocket server_socket, EPollFd epfd)
 {
     self.server_socket = server_socket;
     self.epfd = epfd;
+
+    // NOTE: We don't bother freeing these. They are freed by OS when program ends.
+    self.service_id_to_name.init(mem);
+    self.service_name_to_id.init(mem);
 }
 
 fn void Router.destroy(&self)
@@ -266,7 +270,7 @@ fn void Router.add_client(&self, NativeSocket client_socket, ZString host, ZStri
         abort_with_errno("Client socket of new client wasn't added to epoll");
     }
 
-    DString addr = dstring::new();
+    DString addr = dstring::new(mem);
     defer addr.free();
     addr.appendf("%s:%s", host, port);
 
@@ -277,7 +281,7 @@ fn void Router.add_client(&self, NativeSocket client_socket, ZString host, ZStri
     client.instance_id = instance_id;
     client.state = WAITING_FOR_LOGIN;
     client.socket = client_socket;
-    client.addr = addr.copy_str();
+    client.addr = addr.copy_str(mem);
     client.awaited_responses.enqueue({
         .msg_type = LOGIN,
         .request_enqueued_by_router_us = get_monotonic_event_time_us(),
@@ -690,7 +694,7 @@ fn void Router.close_clients_waiting_for_it(&self)
 // Free memory.
 fn void Client.destroy(&self)
 {
-    self.addr.free();
+    self.addr.free(mem);
     free(self.body);
     while (self.pending_messages.written > 0)
     {
