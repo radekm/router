@@ -4,7 +4,7 @@ import std::collections;
 import std::encoding::json;
 import std::io;
 import std::net::os;
-import std::time::os;
+import std::os::posix;
 import libc;
 
 macro void abort_with_errno(String string, ...) @noreturn
@@ -715,7 +715,7 @@ fn void Client.destroy(&self)
 fn ulong get_monotonic_event_time_us()
 {
 	TimeSpec ts;
-	if (os::clock_gettime(os::CLOCK_REALTIME, &ts) != 0)
+	if (posix::clock_gettime(posix::CLOCK_REALTIME, &ts) != 0)
     {
         abort_with_errno("clock_gettime failed");
     }
