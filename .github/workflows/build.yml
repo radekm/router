@@ -1,0 +1,22 @@
+on: [push]
+
+jobs:
+  build-in-bash:
+    strategy:
+      # Continue build even if some platforms fail.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    name: Build in Bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: radekm/setup-c3@v2
+        with:
+          version: v0.7.1
+      - shell: bash
+        run: |
+          ./build.sh
+          ls -l
