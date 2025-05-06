@@ -2,6 +2,7 @@ module router;
 
 import std::collections;
 import std::net::os;
+import btree;
 
 // Login message is smaller than other messages
 // to prevent exhausting memory by clients that aren't logged in.
@@ -149,7 +150,7 @@ struct Router
     // Owns service names.
     List{String} service_id_to_name;
     // Maps service names to service ids.
-    HashMap{String, ServiceId} service_name_to_id;
+    BTree{ServiceId} service_name_to_id;
 
     // Currently connected clients.
 

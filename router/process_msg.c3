@@ -1,6 +1,9 @@
 module router;
 
+import std::collections;
 import std::io;
+import libc;
+import btree;
 
 fn bool read_short_str(char[] input, String* str, char[]* remaining_input)
 {
@@ -15,19 +18,23 @@ fn bool read_short_str(char[] input, String* str, char[]* remaining_input)
 
 fn ServiceId Router.intern_service_name(&self, String service_name)
 {
-    if (self.service_name_to_id.has_key(service_name))
-    {
-        return self.service_name_to_id[service_name]!!;
-    }
+    BTreeSlot{ServiceId} slot = self.service_name_to_id.@get_slot(
+        fn int(List{String}* service_id_to_name, String service_name, ServiceId item_from_tree)
+        {
+            String existing_service_name = service_id_to_name.get((usz)item_from_tree - 1);
+            if (service_name.len < existing_service_name.len) return -1;
+            if (service_name.len > existing_service_name.len) return 1;
+            return libc::memcmp(service_name.ptr, existing_service_name.ptr, service_name.len);
+        }, &self.service_id_to_name, service_name);
+    if (slot.existed) return *slot.item;
 
     if (self.service_id_to_name.len() == MAX_SERVICE_NAMES) abort("Too many interned service names");
 
     service_name = service_name.copy(mem);  // NOTE: We don't bother freeing this, it's freed by OS when program ends.
     self.service_id_to_name.push(service_name);
     ServiceId new = (ServiceId)self.service_id_to_name.len();
+    *slot.item = new;
 
-    // TODO: Ensure that service name is not copied again to `HashMap`.
-    self.service_name_to_id[service_name] = new;
     return new;
 }
 
